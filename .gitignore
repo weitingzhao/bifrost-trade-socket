@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.env
+*.env.local
+
+# Config secrets (keep .example files)
+config/config.yaml
+config/config.dev.yaml
+config/config.prod.yaml
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Ruff / linters
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+
+# Logs
+*.log
+logs/
+
+# Type stubs
+*.pyi
+
+# mkdocs
+site/
