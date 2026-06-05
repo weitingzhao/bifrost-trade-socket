@@ -4,7 +4,7 @@ install:
 	pip install -e .
 
 install-dev:
-	pip install -e ".[dev]"
+	pip install -e ../bifrost-trade-core -e ".[dev]"
 
 test:
 	pytest -m 'not ib'
