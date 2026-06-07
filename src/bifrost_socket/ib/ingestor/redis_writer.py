@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Set
+from typing import Any, Dict, Optional, Set
 
 from bifrost_core.ws_client.health import HealthHashWriter
 
+from bifrost_socket.ib.ib_health_schema import (
+    ingestor_host_mirror_fields,
+    service_heartbeat_fields,
+    slot_probe_fields,
+)
 from bifrost_socket.ib.ingestor.redis_keys import (
     IB_INGESTER_CHANNEL,
     IB_INGESTER_HEALTH_KEY,
+    IB_INGESTER_ON_DEMAND_STK,
     IB_INGESTER_SUBSCRIPTIONS_KEY,
     IB_INGESTER_TICK_PREFIX,
     IB_INGESTER_TICK_TTL_SEC,
@@ -55,18 +61,44 @@ class IbIngestorRedisWriter:
         ib_probe_at: float = 0.0,
         ib_probe_ok: bool = False,
         ib_probe_interval_sec: float = 0.0,
+        last_error: Optional[str] = None,
+        service_heartbeat_interval_sec: float = 0.0,
+        last_service_heartbeat_at: float = 0.0,
+        next_service_heartbeat_in_s: float = 0.0,
+        service_heartbeat_reconnect_in_progress: str = "",
     ) -> None:
         """Write health hash. env/config_file are set once at init via HealthHashWriter."""
-        self._health.write({
+        fields: Dict[str, Any] = {
             "client_id": client_id,
             "connected": connected,
             "last_msg_ts": last_msg_ts,
             "reconnects": reconnects,
             "msg_count": msg_count,
-            "ib_probe_at": ib_probe_at,
-            "ib_probe_ok": ib_probe_ok,
-            "ib_probe_interval_sec": ib_probe_interval_sec,
-        })
+            **slot_probe_fields(
+                "ingestor",
+                probe_at=ib_probe_at,
+                probe_ok=ib_probe_ok,
+                probe_interval_sec=ib_probe_interval_sec,
+            ),
+            **ingestor_host_mirror_fields(
+                client_id=client_id,
+                connected=connected,
+                probe_at=ib_probe_at,
+                probe_ok=ib_probe_ok,
+                probe_interval_sec=ib_probe_interval_sec,
+                last_error=last_error,
+            ),
+        }
+        fields["host_reconnects"] = reconnects
+        fields.update(
+            service_heartbeat_fields(
+                interval_sec=service_heartbeat_interval_sec,
+                last_heartbeat_at=last_service_heartbeat_at,
+                next_in_s=next_service_heartbeat_in_s,
+                reconnect_in_progress=service_heartbeat_reconnect_in_progress,
+            )
+        )
+        self._health.write(fields)
 
     def set_subscriptions(self, contract_keys: Set[str]) -> None:
         """Replace the subscriptions set atomically."""

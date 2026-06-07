@@ -16,6 +16,10 @@ from bifrost_socket.ib.account_agent.redis_keys import (
     IB_ACCOUNT_STREAM_KEY,
     IB_ACCOUNT_STREAM_MAXLEN,
 )
+from bifrost_socket.ib.ib_health_schema import (
+    service_heartbeat_fields,
+    slot_probe_fields,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,14 @@ class IbAccountAgentRedisWriter:
         secondary_probe_at: float = 0.0,
         secondary_probe_ok: bool = False,
         secondary_probe_interval_sec: float = 0.0,
+        host_last_error: Optional[str] = None,
+        secondary_last_error: Optional[str] = None,
+        host_reconnects: Optional[int] = None,
+        secondary_reconnects: Optional[int] = None,
+        service_heartbeat_interval_sec: float = 0.0,
+        last_service_heartbeat_at: float = 0.0,
+        next_service_heartbeat_in_s: float = 0.0,
+        service_heartbeat_reconnect_in_progress: str = "",
     ) -> None:
         """Write health hash. env/config_file are set at init via HealthHashWriter."""
         fields: Dict[str, Any] = {
@@ -62,20 +74,42 @@ class IbAccountAgentRedisWriter:
             "host_alive": host_alive,
             "client_id": host_client_id,
             "host_client_id": host_client_id,
+            "host_last_error": "" if host_last_error is None else str(host_last_error),
+            "host_reconnects": int(host_reconnects if host_reconnects is not None else reconnects),
             "last_msg_ts": last_msg_ts,
             "reconnects": reconnects,
             "msg_count": msg_count,
-            "host_probe_at": host_probe_at,
-            "host_probe_ok": host_probe_ok,
-            "host_probe_interval_sec": host_probe_interval_sec,
-            "secondary_probe_at": secondary_probe_at,
-            "secondary_probe_ok": secondary_probe_ok,
-            "secondary_probe_interval_sec": secondary_probe_interval_sec,
+            **slot_probe_fields(
+                "host",
+                probe_at=host_probe_at,
+                probe_ok=host_probe_ok,
+                probe_interval_sec=host_probe_interval_sec,
+            ),
+            **slot_probe_fields(
+                "secondary",
+                probe_at=secondary_probe_at,
+                probe_ok=secondary_probe_ok,
+                probe_interval_sec=secondary_probe_interval_sec,
+            ),
         }
         if secondary_connected is not None:
             fields["secondary_connected"] = secondary_connected
+            fields["secondary_present"] = "1"
         if secondary_client_id is not None:
             fields["secondary_client_id"] = secondary_client_id
+        if secondary_connected is not None or secondary_client_id is not None:
+            fields["secondary_last_error"] = (
+                "" if secondary_last_error is None else str(secondary_last_error)
+            )
+            fields["secondary_reconnects"] = int(secondary_reconnects or 0)
+        fields.update(
+            service_heartbeat_fields(
+                interval_sec=service_heartbeat_interval_sec,
+                last_heartbeat_at=last_service_heartbeat_at,
+                next_in_s=next_service_heartbeat_in_s,
+                reconnect_in_progress=service_heartbeat_reconnect_in_progress,
+            )
+        )
         try:
             self._health.write(fields)
         except Exception as e:

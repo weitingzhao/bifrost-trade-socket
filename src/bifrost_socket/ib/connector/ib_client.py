@@ -27,10 +27,9 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from bifrost_socket.ib.connector.ib_connector import IBConnector, IBConnectionDroppedError
+from bifrost_socket.ib.connection_lifecycle import SERVICE_HEARTBEAT_CONNECT_TIMEOUT_SEC
 
 logger = logging.getLogger(__name__)
-
-SERVICE_HEARTBEAT_CONNECT_TIMEOUT_SEC = 5.0
 
 
 class BaseIbClient:
@@ -200,6 +199,17 @@ class BaseIbClient:
                     self.port,
                     self.client_id,
                 )
+            if self._connector is not None:
+                try:
+                    await self._connector.disconnect()
+                except Exception as exc:
+                    logger.debug(
+                        "[ib_client] %s stale connector disconnect before reconnect: %s",
+                        self.name,
+                        exc,
+                    )
+                self._connector = None
+                self._connected_state = False
             self._connector = IBConnector(host=self.host, port=self.port, client_id=self.client_id)
             ok = await self._connector.connect(max_attempts=limit, max_port_steps=port_steps)
             if not ok:

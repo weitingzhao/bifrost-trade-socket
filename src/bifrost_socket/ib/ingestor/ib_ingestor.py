@@ -21,6 +21,7 @@ import signal
 import time
 from typing import Any, Dict, List, Optional, Set
 
+from bifrost_core.core.message_center import IbConnectionStatusTracker
 from bifrost_core.ws_client.retry import ReconnectPolicy
 
 from bifrost_socket.config import (
@@ -28,6 +29,14 @@ from bifrost_socket.config import (
     get_effective_ib_config,
     get_pg_conn_params,
     make_redis_client,
+)
+from bifrost_socket.ib.connection_lifecycle import (
+    REASON_SERVICE_STOPPED,
+    REASON_SESSION_ENDED,
+    ServiceHeartbeatClock,
+    heartbeat_reconnect_slot,
+    publish_ingestor_slot,
+    resolve_ib_broker_lifecycle,
 )
 from bifrost_socket.ib.connector.ib_client import MarketIbClient
 from bifrost_socket.ib.ingestor.redis_writer import IbIngestorRedisWriter
@@ -82,13 +91,16 @@ class IbIngestor:
             env=env,
             config_file=cfg.get("_config_file", ""),
         )
+        self._tracker = IbConnectionStatusTracker(self._rds, service="ib_ingestor")
         self._pg_params = get_pg_conn_params(cfg)
         self._stop = asyncio.Event()
         self._session_disconnected = asyncio.Event()
         self._reconnects = 0
         self._msg_count = 0
         self._last_msg_ts = 0.0
-        self._probe_interval_sec = 5.0
+        self._lifecycle = resolve_ib_broker_lifecycle(cfg, "ib_ingestor")
+        self._hb_clock = ServiceHeartbeatClock(self._lifecycle.service_heartbeat_interval_sec)
+        self._probe_interval_sec = self._lifecycle.probe_interval_sec
         self._last_probe_at = 0.0
         self._last_probe_ok = False
         self._client_id = 0
@@ -113,6 +125,48 @@ class IbIngestor:
     def _include_opt(self) -> bool:
         return bool(self._st().get("include_opt", True))
 
+    def _push_health(
+        self,
+        *,
+        connected: bool,
+        last_msg_ts: float,
+        reconnects: int,
+        msg_count: int,
+        ib_probe_at: float = 0.0,
+        ib_probe_ok: bool = False,
+        ib_probe_interval_sec: float = 0.0,
+        service_heartbeat_reconnect_in_progress: str = "",
+        reason: Optional[str] = None,
+    ) -> None:
+        now = time.time()
+        sh = self._hb_clock.redis_fields(
+            now,
+            reconnect_in_progress=service_heartbeat_reconnect_in_progress,
+        )
+        self._writer.write_health(
+            client_id=self._client_id,
+            connected=connected,
+            last_msg_ts=last_msg_ts,
+            reconnects=reconnects,
+            msg_count=msg_count,
+            ib_probe_at=ib_probe_at,
+            ib_probe_ok=ib_probe_ok,
+            ib_probe_interval_sec=ib_probe_interval_sec,
+            service_heartbeat_interval_sec=float(sh["service_heartbeat_interval_sec"]),
+            last_service_heartbeat_at=float(sh["last_service_heartbeat_at"]),
+            next_service_heartbeat_in_s=float(sh["next_service_heartbeat_in_s"]),
+            service_heartbeat_reconnect_in_progress=str(
+                sh.get("service_heartbeat_reconnect_in_progress") or ""
+            ),
+        )
+        publish_ingestor_slot(
+            self._tracker,
+            connected=connected,
+            client_id=self._client_id or None,
+            occurred_at=last_msg_ts,
+            reason=reason,
+        )
+
     # ── main entry point ──────────────────────────────────────────────────────
 
     async def run(self) -> None:
@@ -124,7 +178,12 @@ class IbIngestor:
                 pass
 
         ib_cfg = get_effective_ib_config(self._cfg)
-        self._probe_interval_sec = ib_cfg["ib_probe_interval_sec"]
+        self._lifecycle = resolve_ib_broker_lifecycle(self._cfg, "ib_ingestor")
+        self._hb_clock = ServiceHeartbeatClock(
+            self._lifecycle.service_heartbeat_interval_sec,
+            last_at=time.time(),
+        )
+        self._probe_interval_sec = self._lifecycle.probe_interval_sec
         self._client_id = ib_cfg["client_id_ingestor"]
         host = ib_cfg["host"]
         port = ib_cfg["port_market_data"]
@@ -158,8 +217,7 @@ class IbIngestor:
 
             self._reconnects += 1
             delay = policy.delay_for_attempt(attempt)
-            self._writer.write_health(
-                client_id=self._client_id,
+            self._push_health(
                 connected=False,
                 last_msg_ts=self._last_msg_ts or time.time(),
                 reconnects=self._reconnects,
@@ -167,6 +225,7 @@ class IbIngestor:
                 ib_probe_at=self._last_probe_at,
                 ib_probe_ok=False,
                 ib_probe_interval_sec=self._probe_interval_sec,
+                reason=REASON_SESSION_ENDED,
             )
             logger.info(
                 "Next session reconnect in %.1fs (attempt %d)…",
@@ -179,12 +238,12 @@ class IbIngestor:
                 pass
 
         # Final health write on clean shutdown.
-        self._writer.write_health(
-            client_id=self._client_id,
+        self._push_health(
             connected=False,
             last_msg_ts=self._last_msg_ts or time.time(),
             reconnects=self._reconnects,
             msg_count=self._msg_count,
+            reason=REASON_SERVICE_STOPPED,
         )
         logger.info(
             "IB ingestor stopped (messages=%d reconnects=%d)",
@@ -203,6 +262,15 @@ class IbIngestor:
         await client.ensure_connected()
         self._session_disconnected.clear()
         self._active_client = client
+        self._push_health(
+            connected=client.connected_snapshot(),
+            last_msg_ts=time.time(),
+            reconnects=self._reconnects,
+            msg_count=self._msg_count,
+            ib_probe_at=self._last_probe_at,
+            ib_probe_ok=self._last_probe_ok,
+            ib_probe_interval_sec=self._probe_interval_sec,
+        )
 
         probe_task = asyncio.create_task(self._probe_loop(client))
         try:
@@ -228,8 +296,7 @@ class IbIngestor:
                         "No STK/OPT rows in watchlist; retry in %ds", WATCHLIST_POLL_SEC
                     )
                     self._writer.set_subscriptions(set())
-                    self._writer.write_health(
-                        client_id=self._client_id,
+                    self._push_health(
                         connected=client.connected_snapshot(),
                         last_msg_ts=self._last_msg_ts or time.time(),
                         reconnects=self._reconnects,
@@ -269,8 +336,7 @@ class IbIngestor:
 
                 await client._run_on_client_loop(_apply_subs())
                 self._writer.set_subscriptions(keys)
-                self._writer.write_health(
-                    client_id=self._client_id,
+                self._push_health(
                     connected=client.connected_snapshot(),
                     last_msg_ts=self._last_msg_ts or time.time(),
                     reconnects=self._reconnects,
@@ -324,15 +390,37 @@ class IbIngestor:
                 break
             except asyncio.TimeoutError:
                 pass
+            now = time.time()
+            reconnect_hint = ""
+            if self._hb_clock.tick(now) and not client.connected_snapshot():
+                reconnect_hint = ServiceHeartbeatClock.reconnect_hint_part(
+                    "Host", self._client_id
+                )
+                self._push_health(
+                    connected=False,
+                    last_msg_ts=self._last_msg_ts or now,
+                    reconnects=self._reconnects,
+                    msg_count=self._msg_count,
+                    ib_probe_at=self._last_probe_at,
+                    ib_probe_ok=self._last_probe_ok,
+                    ib_probe_interval_sec=self._probe_interval_sec,
+                    service_heartbeat_reconnect_in_progress=reconnect_hint,
+                )
+                await heartbeat_reconnect_slot(
+                    client,
+                    slot_label="Host",
+                    client_id=self._client_id,
+                    connect_timeout_sec=self._lifecycle.connect_timeout_sec,
+                    log_prefix="IB ingestor",
+                )
+                reconnect_hint = ""
             ok = client.connected_snapshot()
             if not ok:
                 self._session_disconnected.set()
-            now = time.time()
             self._last_probe_at = now
             self._last_probe_ok = ok
             try:
-                self._writer.write_health(
-                    client_id=self._client_id,
+                self._push_health(
                     connected=ok,
                     last_msg_ts=self._last_msg_ts or now,
                     reconnects=self._reconnects,
@@ -340,6 +428,7 @@ class IbIngestor:
                     ib_probe_at=now,
                     ib_probe_ok=ok,
                     ib_probe_interval_sec=self._probe_interval_sec,
+                    service_heartbeat_reconnect_in_progress=reconnect_hint,
                 )
             except Exception as e:
                 logger.debug("probe health write: %s", e)

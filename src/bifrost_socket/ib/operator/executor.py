@@ -140,12 +140,23 @@ class IbOperatorExecutor:
             return {"ok": True, "data": {"rows": rows, "underlying_price": underlying_price}}
         return {"ok": False, "error": f"unhandled_op:{op}"}
 
+    @staticmethod
+    def _slot_connected(c: Any) -> bool:
+        """Non-blocking slot state (Account Agent probe parity).
+
+        Prefer ``_connected_state`` so a long Secondary connect/RPC on another
+        client loop does not block the Operator main thread or mark Host stale.
+        """
+        if hasattr(c, "_connected_state"):
+            return bool(c._connected_state)
+        snap = getattr(c, "connected_snapshot", None)
+        if callable(snap):
+            return _jsonish_connected(snap())
+        return _jsonish_connected(getattr(c, "connected", False))
+
     def health_dict(self) -> Dict[str, Any]:
         def _conn(c: Any) -> bool:
-            snap = getattr(c, "connected_snapshot", None)
-            if callable(snap):
-                return _jsonish_connected(snap())
-            return _jsonish_connected(getattr(c, "connected", False))
+            return self._slot_connected(c)
 
         out: Dict[str, Any] = {
             "host": {
@@ -175,17 +186,25 @@ class IbOperatorExecutor:
             out["secondary"] = None
         return out
 
-    async def record_ib_probe(self, interval_sec: float) -> None:
+    def record_ib_probe(self, interval_sec: float) -> None:
+        """Sync IB liveness snapshot for Redis (safe from the operator main thread only)."""
         self._ib_probe_interval_sec = float(interval_sec)
         now = time.time()
         self._host_ib_probe_at = now
-        self._host_ib_probe_ok = bool(self._primary.connected_snapshot())
+        self._host_ib_probe_ok = self._slot_connected(self._primary)
         if self._account_secondary is not None:
             self._secondary_ib_probe_at = now
-            self._secondary_ib_probe_ok = bool(self._account_secondary.connected_snapshot())
+            self._secondary_ib_probe_ok = self._slot_connected(self._account_secondary)
         else:
             self._secondary_ib_probe_at = 0.0
             self._secondary_ib_probe_ok = False
+
+    def slots_connected_snapshot(self) -> tuple[bool, Optional[bool]]:
+        """Per-slot connected state for heartbeat reconnect (non-blocking)."""
+        host_ok = self._slot_connected(self._primary)
+        if self._account_secondary is None:
+            return host_ok, None
+        return host_ok, self._slot_connected(self._account_secondary)
 
     async def connect_all(self, *, max_connect_attempts: Optional[int] = None) -> None:
         await self.connect_primary_only(max_connect_attempts=max_connect_attempts)

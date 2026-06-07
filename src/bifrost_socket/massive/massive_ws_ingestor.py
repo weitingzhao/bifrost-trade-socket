@@ -91,6 +91,7 @@ class MassiveWsIngestor:
         self._reconnects = 0
         self._msg_count = 0
         self._ws_connected = False
+        self._last_msg_ts = 0.0
         self._current_symbols: Set[str] = set()
 
     async def run(self) -> None:
@@ -137,7 +138,7 @@ class MassiveWsIngestor:
         self._ws_connected = False
         self._writer.write_health(
             connected=False,
-            last_msg_ts=time.time(),
+            last_msg_ts=self._last_msg_ts or time.time(),
             reconnects=self._reconnects,
             msg_count=self._msg_count,
         )
@@ -147,12 +148,18 @@ class MassiveWsIngestor:
             self._reconnects,
         )
 
+    def _health_last_msg_ts(self) -> float:
+        """Wall time of last Polygon quote; do not fake freshness while WS is down."""
+        if self._last_msg_ts > 0:
+            return self._last_msg_ts
+        return time.time()
+
     async def _health_heartbeat_loop(self) -> None:
         while not self._stop.is_set():
             try:
                 self._writer.write_health(
                     connected=self._ws_connected,
-                    last_msg_ts=time.time(),
+                    last_msg_ts=self._health_last_msg_ts(),
                     reconnects=self._reconnects,
                     msg_count=self._msg_count,
                 )
@@ -240,7 +247,7 @@ class MassiveWsIngestor:
                 self._reconnects = 0
                 self._writer.write_health(
                     connected=True,
-                    last_msg_ts=time.time(),
+                    last_msg_ts=self._health_last_msg_ts(),
                     reconnects=self._reconnects,
                     msg_count=self._msg_count,
                 )
@@ -311,11 +318,12 @@ class MassiveWsIngestor:
                     if not ev:
                         continue
                     self._msg_count += 1
+                    self._last_msg_ts = time.time()
                     await self._handle_message(msg)
                     if self._msg_count % 500 == 0:
                         self._writer.write_health(
                             connected=True,
-                            last_msg_ts=time.time(),
+                            last_msg_ts=self._last_msg_ts,
                             reconnects=self._reconnects,
                             msg_count=self._msg_count,
                         )
@@ -360,7 +368,7 @@ class MassiveWsIngestor:
 
             self._writer.write_health(
                 connected=True,
-                last_msg_ts=time.time(),
+                last_msg_ts=self._health_last_msg_ts(),
                 reconnects=self._reconnects,
                 msg_count=self._msg_count,
             )
