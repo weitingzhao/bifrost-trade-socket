@@ -8,7 +8,9 @@ from typing import Any, Set
 
 from bifrost_core.ws_client.health import HealthHashWriter
 
+from bifrost_socket.ib.ib_health_schema import service_heartbeat_fields
 from bifrost_socket.massive.redis_keys import (
+    HEALTH_HEARTBEAT_INTERVAL_SEC,
     MASSIVE_HEALTH_KEY,
     MASSIVE_KEY_PREFIX,
     MASSIVE_KEY_TTL_SEC,
@@ -65,13 +67,24 @@ class MassiveRedisWriter:
         last_msg_ts: float,
         reconnects: int,
         msg_count: int,
+        now: float | None = None,
     ) -> None:
-        fields = {
+        import time
+
+        ts = float(now if now is not None else time.time())
+        fields: dict[str, Any] = {
             "connected": connected,
             "last_msg_ts": last_msg_ts,
             "reconnects": reconnects,
             "msg_count": msg_count,
         }
+        fields.update(
+            service_heartbeat_fields(
+                interval_sec=float(HEALTH_HEARTBEAT_INTERVAL_SEC),
+                last_heartbeat_at=ts,
+                next_in_s=float(HEALTH_HEARTBEAT_INTERVAL_SEC),
+            )
+        )
         try:
             self._health.write(fields)
         except Exception as e:

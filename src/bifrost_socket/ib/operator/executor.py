@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -41,10 +42,12 @@ class IbOperatorExecutor:
         self._secondary_ib_probe_at = 0.0
         self._secondary_ib_probe_ok = False
         self._ib_probe_interval_sec = 5.0
+        self._metrics_lock = threading.Lock()
 
     def note_cmd_processed(self) -> None:
-        self._cmd_count += 1
-        self._last_cmd_ts = time.time()
+        with self._metrics_lock:
+            self._cmd_count += 1
+            self._last_cmd_ts = time.time()
 
     def _account_for_slot(self, payload: Dict[str, Any]) -> Any:
         slot = (payload.get("account_slot") or "primary").strip().lower()
@@ -158,19 +161,28 @@ class IbOperatorExecutor:
         def _conn(c: Any) -> bool:
             return self._slot_connected(c)
 
+        with self._metrics_lock:
+            host_probe_at = float(self._host_ib_probe_at)
+            host_probe_ok = bool(self._host_ib_probe_ok)
+            sec_probe_at = float(self._secondary_ib_probe_at)
+            sec_probe_ok = bool(self._secondary_ib_probe_ok)
+            probe_iv = float(self._ib_probe_interval_sec)
+            cmd_count = self._cmd_count
+            last_cmd_ts = self._last_cmd_ts
+
         out: Dict[str, Any] = {
             "host": {
                 "connected": _conn(self._primary),
                 "client_id": int(getattr(self._primary, "client_id", 0)),
                 "last_error": getattr(self._primary, "last_error", None),
                 "reconnects": int(getattr(self._primary, "reconnects", 0)),
-                "ib_probe_at": float(self._host_ib_probe_at),
-                "ib_probe_ok": bool(self._host_ib_probe_ok),
-                "ib_probe_interval_sec": float(self._ib_probe_interval_sec),
+                "ib_probe_at": host_probe_at,
+                "ib_probe_ok": host_probe_ok,
+                "ib_probe_interval_sec": probe_iv,
             },
             "service_alive": True,
-            "cmd_count": self._cmd_count,
-            "last_cmd_ts": self._last_cmd_ts,
+            "cmd_count": cmd_count,
+            "last_cmd_ts": last_cmd_ts,
         }
         if self._account_secondary is not None:
             out["secondary"] = {
@@ -178,26 +190,33 @@ class IbOperatorExecutor:
                 "client_id": int(getattr(self._account_secondary, "client_id", 0)),
                 "last_error": getattr(self._account_secondary, "last_error", None),
                 "reconnects": int(getattr(self._account_secondary, "reconnects", 0)),
-                "ib_probe_at": float(self._secondary_ib_probe_at),
-                "ib_probe_ok": bool(self._secondary_ib_probe_ok),
-                "ib_probe_interval_sec": float(self._ib_probe_interval_sec),
+                "ib_probe_at": sec_probe_at,
+                "ib_probe_ok": sec_probe_ok,
+                "ib_probe_interval_sec": probe_iv,
             }
         else:
             out["secondary"] = None
         return out
 
     def record_ib_probe(self, interval_sec: float) -> None:
-        """Sync IB liveness snapshot for Redis (safe from the operator main thread only)."""
-        self._ib_probe_interval_sec = float(interval_sec)
+        """Sync IB liveness snapshot for Redis (probe thread + main; non-blocking reads only)."""
+        host_ok = self._slot_connected(self._primary)
+        sec_ok = (
+            self._slot_connected(self._account_secondary)
+            if self._account_secondary is not None
+            else False
+        )
         now = time.time()
-        self._host_ib_probe_at = now
-        self._host_ib_probe_ok = self._slot_connected(self._primary)
-        if self._account_secondary is not None:
-            self._secondary_ib_probe_at = now
-            self._secondary_ib_probe_ok = self._slot_connected(self._account_secondary)
-        else:
-            self._secondary_ib_probe_at = 0.0
-            self._secondary_ib_probe_ok = False
+        with self._metrics_lock:
+            self._ib_probe_interval_sec = float(interval_sec)
+            self._host_ib_probe_at = now
+            self._host_ib_probe_ok = host_ok
+            if self._account_secondary is not None:
+                self._secondary_ib_probe_at = now
+                self._secondary_ib_probe_ok = sec_ok
+            else:
+                self._secondary_ib_probe_at = 0.0
+                self._secondary_ib_probe_ok = False
 
     def slots_connected_snapshot(self) -> tuple[bool, Optional[bool]]:
         """Per-slot connected state for heartbeat reconnect (non-blocking)."""

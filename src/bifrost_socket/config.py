@@ -221,13 +221,26 @@ def make_redis_client(config: Dict[str, Any]) -> Any:
 
 
 def get_pg_conn_params(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract PostgreSQL connection parameters from config['status'] (or config['database'])."""
-    pg = config.get("status") or config.get("database") or config
+    """Build psycopg2 connection params from root ``postgres`` block (engine parity)."""
+    pg = config.get("postgres") or config.get("database") or {}
+    if not isinstance(pg, dict):
+        pg = {}
+    db = pg.get("database") or pg.get("Database") or pg.get("db") or pg.get("dbname")
+    if not db and pg:
+        for k, v in pg.items():
+            if (
+                k
+                and isinstance(v, str)
+                and v.strip()
+                and k.strip().lower() in ("database", "db", "dbname")
+            ):
+                db = v.strip()
+                break
     return {
-        "host": str(pg.get("host") or "127.0.0.1"),
-        "port": int(pg.get("port") or 5432),
-        "dbname": str(pg.get("dbname") or pg.get("database") or "bifrost_dev"),
-        "user": str(pg.get("user") or pg.get("username") or "postgres"),
-        "password": str(pg.get("password") or ""),
+        "host": str(pg.get("host") or os.environ.get("PGHOST") or "127.0.0.1"),
+        "port": int(pg.get("port") or os.environ.get("PGPORT") or 5432),
+        "dbname": str(db or os.environ.get("PGDATABASE") or "bifrost_dev"),
+        "user": str(pg.get("user") or pg.get("username") or os.environ.get("PGUSER") or "postgres"),
+        "password": str(pg.get("password") or os.environ.get("PGPASSWORD") or ""),
         "connect_timeout": 10,
     }

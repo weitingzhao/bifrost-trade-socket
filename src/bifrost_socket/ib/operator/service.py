@@ -16,7 +16,6 @@ from bifrost_socket.config import detect_env, get_effective_ib_config, make_redi
 from bifrost_socket.ib.connection_lifecycle import (
     HeartbeatReconnectTarget,
     ServiceHeartbeatClock,
-    _agent_debug_log,
     heartbeat_reconnect_slots_parallel,
     publish_operator_slots,
     publish_service_stopped_disconnects,
@@ -44,10 +43,78 @@ from bifrost_socket.ib.operator.redis_io import (
 )
 logger = logging.getLogger(__name__)
 
-# Serialize all IB client asyncio.run() calls on the operator main thread (Legacy parity).
-# A background probe thread was removed: concurrent asyncio.run against shared client loops
-# caused TWS disconnect/reconnect storms while Redis still showed reconnects=0.
+# Serialize IB asyncio.run() (RPC connect/reconnect/execute) on the main thread only.
+# Probe health refresh runs on a separate daemon thread and never calls asyncio.run.
 _OPERATOR_MAIN_LOCK = threading.Lock()
+
+
+class _ReconnectHint:
+    """Thread-safe reconnect-in-progress label for probe health writes."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._value = ""
+
+    def set(self, value: str) -> None:
+        with self._lock:
+            self._value = value
+
+    def get(self) -> str:
+        with self._lock:
+            return self._value
+
+
+class _OperatorProbeThread(threading.Thread):
+    """Periodic IB liveness + Redis health (Account Agent probe-loop parity).
+
+    Reads ``_connected_state`` only — no asyncio.run, no ``_OPERATOR_MAIN_LOCK``.
+    """
+
+    def __init__(
+        self,
+        *,
+        stop: threading.Event,
+        executor: IbOperatorExecutor,
+        writer: IbOperatorHealthWriter,
+        probe_interval_sec: float,
+        tracker: Optional[IbConnectionStatusTracker],
+        hb_clock: ServiceHeartbeatClock,
+        reconnect_hint: _ReconnectHint,
+    ) -> None:
+        super().__init__(name="ib-operator-probe", daemon=True)
+        self._stop_event = stop
+        self._executor = executor
+        self._writer = writer
+        self._probe_iv = float(probe_interval_sec)
+        self._tracker = tracker
+        self._hb_clock = hb_clock
+        self._reconnect_hint = reconnect_hint
+
+    def run(self) -> None:
+        while not self._stop_event.wait(timeout=max(1.0, self._probe_iv)):
+            if self._stop_event.is_set():
+                break
+            try:
+                self._tick()
+            except Exception as e:
+                logger.debug("probe thread tick: %s", e)
+
+    def write_health_now(self) -> None:
+        """Immediate health write (e.g. after reconnect); safe from main thread."""
+        self._tick()
+
+    def _tick(self) -> None:
+        self._executor.record_ib_probe(self._probe_iv)
+        h = self._executor.health_dict()
+        now = time.time()
+        hint = self._reconnect_hint.get()
+        h["updated_at"] = now
+        h.update(self._hb_clock.redis_fields(now, reconnect_in_progress=hint))
+        if hint:
+            h["service_heartbeat_reconnect_in_progress"] = hint
+        self._writer.write(h)
+        if self._tracker is not None:
+            publish_operator_slots(self._tracker, h)
 
 
 def _build_executor(config: Dict[str, Any]) -> IbOperatorExecutor:
@@ -192,62 +259,37 @@ def run_ib_operator_loop(
         # TWS still showed clientId=20 connected (Ingestor/Account Agent do not block).
 
     stop = stop_event or threading.Event()
-    last_probe_write_at = time.time()
+    reconnect_hint = _ReconnectHint()
+    probe_thread = _OperatorProbeThread(
+        stop=stop,
+        executor=executor,
+        writer=writer,
+        probe_interval_sec=probe_iv,
+        tracker=tracker,
+        hb_clock=hb_clock,
+        reconnect_hint=reconnect_hint,
+    )
+    probe_thread.start()
 
     try:
         while not stop.is_set():
             now = time.time()
             reconnect_job: Optional[tuple[str, int, bool]] = None
-            with _OPERATOR_MAIN_LOCK:
-                if hb_clock.tick(now):
-                    host_ok, sec_ok = executor.slots_connected_snapshot()
-                    if not host_ok:
-                        hid = int((executor.health_dict().get("host") or {}).get("client_id") or 0)
-                        hint = ServiceHeartbeatClock.reconnect_hint_part("Host", hid)
-                        _write_health(
-                            writer, executor, probe_iv, tracker,
-                            hb_clock=hb_clock,
-                            service_heartbeat_reconnect_in_progress=hint,
-                        )
-                        reconnect_job = ("Host", hid, True)
-                    elif sec_ok is not None and not sec_ok:
-                        sid = int((executor.health_dict().get("secondary") or {}).get("client_id") or 0)
-                        hint = ServiceHeartbeatClock.reconnect_hint_part("Secondary", sid)
-                        _write_health(
-                            writer, executor, probe_iv, tracker,
-                            hb_clock=hb_clock,
-                            service_heartbeat_reconnect_in_progress=hint,
-                        )
-                        reconnect_job = ("Secondary", sid, False)
-                    else:
-                        _write_health(
-                            writer, executor, probe_iv, tracker,
-                            hb_clock=hb_clock,
-                            service_heartbeat_reconnect_in_progress="",
-                        )
-
-                if now - last_probe_write_at >= probe_iv:
-                    _write_health(writer, executor, probe_iv, tracker, hb_clock=hb_clock)
-                    last_probe_write_at = now
+            if hb_clock.tick(now):
+                host_ok, sec_ok = executor.slots_connected_snapshot()
+                if not host_ok:
+                    hid = int((executor.health_dict().get("host") or {}).get("client_id") or 0)
+                    reconnect_hint.set(ServiceHeartbeatClock.reconnect_hint_part("Host", hid))
+                    reconnect_job = ("Host", hid, True)
+                elif sec_ok is not None and not sec_ok:
+                    sid = int((executor.health_dict().get("secondary") or {}).get("client_id") or 0)
+                    reconnect_hint.set(ServiceHeartbeatClock.reconnect_hint_part("Secondary", sid))
+                    reconnect_job = ("Secondary", sid, False)
+                else:
+                    reconnect_hint.set("")
 
             if reconnect_job is not None:
                 slot_label, client_id, reconnect_host = reconnect_job
-                host_before, sec_before = executor.slots_connected_snapshot()
-                # #region agent log
-                _agent_debug_log(
-                    location="operator/service.py:reconnect_job:before",
-                    message="operator heartbeat reconnect",
-                    data={
-                        "slot": slot_label,
-                        "client_id": client_id,
-                        "connect_timeout_sec": lifecycle.connect_timeout_sec,
-                        "host_before": host_before,
-                        "sec_before": sec_before,
-                    },
-                    hypothesis_id="H1",
-                )
-                # #endregion
-                # Match Account Agent: use lifecycle connect_timeout (IB sync can exceed 5s).
                 _operator_heartbeat_reconnect_slot(
                     executor,
                     slot=slot_label,
@@ -255,25 +297,8 @@ def run_ib_operator_loop(
                     connect_timeout_sec=lifecycle.connect_timeout_sec,
                     reconnect_host=reconnect_host,
                 )
-                host_after, sec_after = executor.slots_connected_snapshot()
-                # #region agent log
-                _agent_debug_log(
-                    location="operator/service.py:reconnect_job:after",
-                    message="operator heartbeat reconnect done",
-                    data={
-                        "slot": slot_label,
-                        "host_after": host_after,
-                        "sec_after": sec_after,
-                    },
-                    hypothesis_id="H1",
-                )
-                # #endregion
-                with _OPERATOR_MAIN_LOCK:
-                    _write_health(
-                        writer, executor, probe_iv, tracker,
-                        hb_clock=hb_clock,
-                        service_heartbeat_reconnect_in_progress="",
-                    )
+                reconnect_hint.set("")
+                probe_thread.write_health_now()
 
             # Drain pending (PEL) first, then read new.
             entries = []
@@ -288,7 +313,12 @@ def run_ib_operator_loop(
                 logger.warning("xreadgroup pending (stream=%s): %s", stream, e)
 
             if not entries and not stop.is_set():
-                entries = runner.read_new()
+                try:
+                    entries = runner.read_new()
+                except Exception as e:
+                    # Transient Redis timeouts must not tear down IB sessions (finally → disconnect_all).
+                    logger.warning("xreadgroup read_new (stream=%s): %s", stream, e)
+                    continue
 
             if not entries:
                 continue
@@ -318,13 +348,14 @@ def run_ib_operator_loop(
                 with _OPERATOR_MAIN_LOCK:
                     outcome = asyncio.run(_handle_message(executor, msg))
                     executor.note_cmd_processed()
-                    _write_health(writer, executor, probe_iv, tracker, hb_clock=hb_clock)
                 body, enc_err = dumps_result(outcome, max_bytes=max_bytes)
                 if enc_err:
                     body, _ = dumps_result({"ok": False, "error": enc_err}, max_bytes=max_bytes)
                 write_result(r, rk, body or '{"ok":false,"error":"encode"}', ttl_sec=result_ttl)
                 ack_message(r, stream, group, entry_id)
     finally:
+        stop.set()
+        probe_thread.join(timeout=max(2.0, probe_iv + 1.0))
         logger.info("IB Operator stopping: disconnecting IB clients")
         try:
             with _OPERATOR_MAIN_LOCK:

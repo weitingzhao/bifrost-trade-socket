@@ -166,6 +166,39 @@ def test_operator_health_writer_merges_without_delete() -> None:
     r.delete.assert_not_called()
 
 
+def test_operator_probe_writes_health_without_asyncio() -> None:
+    import time
+
+    from bifrost_socket.ib.connection_lifecycle import ServiceHeartbeatClock
+    from bifrost_socket.ib.operator.service import _OperatorProbeThread, _ReconnectHint
+
+    primary = MagicMock()
+    primary._connected_state = True
+    primary.client_id = 20
+    primary.last_error = None
+    primary.reconnects = 0
+    ex = _executor(primary=primary)
+    r = MagicMock()
+    from bifrost_socket.ib.operator.health_writer import IbOperatorHealthWriter
+
+    writer = IbOperatorHealthWriter(r)
+    writes: list = []
+    writer.write = writes.append  # type: ignore[method-assign]
+    probe = _OperatorProbeThread(
+        stop=__import__("threading").Event(),
+        executor=ex,
+        writer=writer,
+        probe_interval_sec=5.0,
+        tracker=None,
+        hb_clock=ServiceHeartbeatClock(30.0, last_at=time.time()),
+        reconnect_hint=_ReconnectHint(),
+    )
+    probe.write_health_now()
+    assert len(writes) == 1
+    assert writes[0]["host"]["ib_probe_ok"] is True
+    assert writes[0]["host"]["ib_probe_at"] > 0
+
+
 def test_read_operator_health_hash() -> None:
     class FakeRedisHash:
         def type(self, _key: str) -> str:

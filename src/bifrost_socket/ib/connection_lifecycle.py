@@ -26,45 +26,6 @@ from bifrost_socket.config import get_effective_ib_config
 
 logger = logging.getLogger(__name__)
 
-import os as _os
-
-_DEBUG_LOG_PATH = _os.environ.get(
-    "BIFROST_AGENT_DEBUG_LOG",
-    "/Users/vision-mac-trader/Desktop/stocks/bifrost-trade-infra/.cursor/debug-6a885c.log",
-)
-
-
-def _agent_debug_log(
-    *,
-    location: str,
-    message: str,
-    data: Dict[str, Any],
-    hypothesis_id: str,
-) -> None:
-    # #region agent log
-    try:
-        import json
-
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
-            fh.write(
-                json.dumps(
-                    {
-                        "sessionId": "6a885c",
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "hypothesisId": hypothesis_id,
-                        "timestamp": int(time.time() * 1000),
-                    },
-                    default=str,
-                )
-                + "\n"
-            )
-    except OSError:
-        pass
-    # #endregion
-
-
 # ── Constants (single source of truth) ───────────────────────────────────────
 
 SERVICE_HEARTBEAT_CONNECT_TIMEOUT_SEC = 5.0
@@ -209,48 +170,9 @@ async def heartbeat_reconnect_slots_parallel(
     """Run one reconnect attempt per target in parallel; failures stay local."""
 
     async def _one(target: HeartbeatReconnectTarget) -> None:
-        t0 = time.time()
-        # #region agent log
-        _agent_debug_log(
-            location="connection_lifecycle.py:heartbeat_reconnect:start",
-            message="heartbeat reconnect begin",
-            data={
-                "log_prefix": log_prefix,
-                "slot": target.slot_label,
-                "client_id": target.client_id,
-                "connect_timeout_sec": connect_timeout_sec,
-            },
-            hypothesis_id="H1",
-        )
-        # #endregion
         try:
             await asyncio.wait_for(target.reconnect(), timeout=connect_timeout_sec)
-            # #region agent log
-            _agent_debug_log(
-                location="connection_lifecycle.py:heartbeat_reconnect:ok",
-                message="heartbeat reconnect finished",
-                data={
-                    "log_prefix": log_prefix,
-                    "slot": target.slot_label,
-                    "elapsed_sec": round(time.time() - t0, 3),
-                },
-                hypothesis_id="H1",
-            )
-            # #endregion
         except asyncio.TimeoutError:
-            # #region agent log
-            _agent_debug_log(
-                location="connection_lifecycle.py:heartbeat_reconnect:timeout",
-                message="heartbeat reconnect wait_for TIMEOUT",
-                data={
-                    "log_prefix": log_prefix,
-                    "slot": target.slot_label,
-                    "connect_timeout_sec": connect_timeout_sec,
-                    "elapsed_sec": round(time.time() - t0, 3),
-                },
-                hypothesis_id="H1",
-            )
-            # #endregion
             logger.debug(
                 "%s %s heartbeat connect timed out after %.0fs",
                 log_prefix,
@@ -258,19 +180,6 @@ async def heartbeat_reconnect_slots_parallel(
                 connect_timeout_sec,
             )
         except Exception as e:
-            # #region agent log
-            _agent_debug_log(
-                location="connection_lifecycle.py:heartbeat_reconnect:error",
-                message="heartbeat reconnect exception",
-                data={
-                    "log_prefix": log_prefix,
-                    "slot": target.slot_label,
-                    "error": str(e),
-                    "elapsed_sec": round(time.time() - t0, 3),
-                },
-                hypothesis_id="H1",
-            )
-            # #endregion
             logger.debug("%s %s heartbeat connect: %s", log_prefix, target.slot_label, e)
 
     if targets:
