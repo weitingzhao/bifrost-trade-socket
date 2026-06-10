@@ -10,6 +10,7 @@ Usage:
 Troubleshooting:
 - IB Error 326 / client id in use: assign distinct client_ids in YAML (ib.host.client_id.operator).
 - Redis NOGROUP: stream or consumer group was missing; Operator recreates it on startup.
+- Dashboard log: Redis stream ``bifrost:console:ws_ib_operator`` (Monitor IB Operator log panel).
 """
 
 import logging
@@ -20,22 +21,50 @@ from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# Must run before any import chain that loads ib_insync.decoder (binds parseIBDatetime).
+from bifrost_socket.ib.ib_timezone_patch import apply_ib_timezone_patch
+
+apply_ib_timezone_patch()
+
 from bifrost_socket.config import get_effective_ib_config, load_config, resolve_config_path
 from bifrost_socket.ib.operator.config import effective_ib_operator_settings
+from bifrost_socket.ib.operator.redis_keys import IB_OPERATOR_LOG_STREAM_KEY
 from bifrost_socket.ib.operator.service import run_ib_operator_loop
 
+_LOG_STREAM_MAXLEN = 2000
 
-def _setup_logging(level: int) -> None:
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(
+
+def _console_log_redis_url(config: dict) -> str:
+    from bifrost_core.core.redis_url import effective_redis_dict, format_redis_url
+
+    return format_redis_url(effective_redis_dict(config, default_db=0))
+
+
+def _setup_logging(level: int, config: dict) -> None:
+    from bifrost_core.core.logging_redis_stream import RedisStreamLogHandler
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(
         logging.Formatter(
             fmt="%(asctime)s %(name)s [%(levelname)s]  %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
     )
+    redis_handler = RedisStreamLogHandler(
+        _console_log_redis_url(config),
+        IB_OPERATOR_LOG_STREAM_KEY,
+        maxlen=_LOG_STREAM_MAXLEN,
+    )
+    redis_handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
     root = logging.getLogger()
     root.handlers.clear()
-    root.addHandler(handler)
+    root.addHandler(console_handler)
+    root.addHandler(redis_handler)
     root.setLevel(level)
 
 
@@ -54,12 +83,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    _setup_logging(getattr(logging, args.log_level))
-    log = logging.getLogger(__name__)
-
-    # B1 fix: resolve_config_path respects env precedence correctly.
     config_path = resolve_config_path(str(_PROJECT_ROOT), sys.argv[1:])
     cfg, resolved = load_config(config_path)
+    _setup_logging(getattr(logging, args.log_level), cfg)
+    log = logging.getLogger(__name__)
+
     log.info("Config loaded: %s", resolved)
 
     op = effective_ib_operator_settings(cfg)

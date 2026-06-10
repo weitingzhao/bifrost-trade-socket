@@ -6,7 +6,7 @@ ARG BIFROST_CORE_REF=main
 ARG GITHUB_ORG=YOUR_ORG
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev git \
+    gcc libpq-dev git tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Install shared library from bifrost-trade-core

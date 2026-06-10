@@ -987,6 +987,7 @@ class IBConnector:
             await self.connect()
         try:
             from datetime import datetime, timedelta, timezone
+
             time_str = ""
             if since_days is not None and since_days > 0:
                 start = datetime.now(timezone.utc) - timedelta(days=since_days - 1)

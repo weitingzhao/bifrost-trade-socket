@@ -338,6 +338,12 @@ def run_ib_operator_loop(
                     continue
 
                 if msg.is_expired():
+                    logger.info(
+                        "RPC expired op=%s req_id=%s caller=%s",
+                        msg.op,
+                        msg.req_id,
+                        msg.caller,
+                    )
                     err_body, enc_err = dumps_result({"ok": False, "error": "deadline_expired"}, max_bytes=max_bytes)
                     if enc_err:
                         err_body = '{"ok":false,"error":"deadline_expired"}'
@@ -345,9 +351,21 @@ def run_ib_operator_loop(
                     ack_message(r, stream, group, entry_id)
                     continue
 
+                logger.info(
+                    "RPC received op=%s req_id=%s caller=%s",
+                    msg.op,
+                    msg.req_id,
+                    msg.caller,
+                )
                 with _OPERATOR_MAIN_LOCK:
                     outcome = asyncio.run(_handle_message(executor, msg))
                     executor.note_cmd_processed()
+                logger.info(
+                    "RPC completed op=%s req_id=%s ok=%s",
+                    msg.op,
+                    msg.req_id,
+                    outcome.get("ok"),
+                )
                 body, enc_err = dumps_result(outcome, max_bytes=max_bytes)
                 if enc_err:
                     body, _ = dumps_result({"ok": False, "error": enc_err}, max_bytes=max_bytes)
