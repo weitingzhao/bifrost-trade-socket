@@ -15,6 +15,10 @@ from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+from bifrost_socket.ib.ib_timezone_patch import apply_ib_timezone_patch
+
+apply_ib_timezone_patch()
+
 from bifrost_socket.config import load_config, resolve_config_path
 from bifrost_socket.ib.account_agent.ib_account_agent import IbAccountAgent
 
