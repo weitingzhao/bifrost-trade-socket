@@ -46,6 +46,9 @@ def _get_massive_cfg(config: dict) -> dict:
     feats = m.get("features") or {}
     trades_enabled = bool(feats.get("trades_enabled", tier == "developer"))
     ws_url = (m.get("ws_url") or "wss://socket.polygon.io/options").strip()
+    # Starter plans lack real-time WS; default to delayed endpoint (ARCHITECTURE § Massive).
+    if tier == "starter" and "://socket.polygon.io" in ws_url:
+        ws_url = ws_url.replace("://socket.polygon.io", "://delayed.polygon.io")
     return {
         "api_key": api_key,
         "ws_url": ws_url,
