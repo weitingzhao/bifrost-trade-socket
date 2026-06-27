@@ -2,7 +2,7 @@
 
 > 本项目是 bifrost-trader-engine 重构的一部分。迁移进度见 `bifrost-trade-infra/docs/MIGRATION_TRACKING.md`。
 
-与本项目用户的所有对话一律使用中文。
+与本项目用户对话一律使用中文回复（无论用户用何种语言提问）；UI 字符串与代码标识符使用 English。
 
 ## 职责范围
 
