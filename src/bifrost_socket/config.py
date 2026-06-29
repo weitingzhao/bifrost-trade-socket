@@ -145,6 +145,28 @@ def load_config(config_path: str) -> Tuple[Dict[str, Any], str]:
     return merged, str(path)
 
 
+# ── IB mode (live vs mock) ──────────────────────────────────────────────────────
+
+IB_MODE_LIVE = "live"
+IB_MODE_MOCK = "mock"
+
+
+def get_ib_mode(config: Dict[str, Any]) -> str:
+    """Resolve the IB connection mode for socket services.
+
+    ``ib.mode: mock`` (W0 — trade-k8s-native) makes IB edge services run without
+    opening any TWS socket, so the environment consumes zero live client_id.
+    Any value other than ``mock`` (or absent) resolves to ``live``.
+    Env override: ``BIFROST_IB_MODE``.
+    """
+    env_override = os.environ.get("BIFROST_IB_MODE", "").strip().lower()
+    if env_override in (IB_MODE_LIVE, IB_MODE_MOCK):
+        return env_override
+    ib_raw = config.get("ib") if isinstance(config.get("ib"), dict) else {}
+    mode = str(ib_raw.get("mode") or IB_MODE_LIVE).strip().lower()
+    return IB_MODE_MOCK if mode == IB_MODE_MOCK else IB_MODE_LIVE
+
+
 # ── IB config extraction ───────────────────────────────────────────────────────
 
 def get_effective_ib_config(config: Dict[str, Any]) -> Dict[str, Any]:

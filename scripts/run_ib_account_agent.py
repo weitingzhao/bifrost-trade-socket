@@ -19,7 +19,7 @@ from bifrost_socket.ib.ib_timezone_patch import apply_ib_timezone_patch
 
 apply_ib_timezone_patch()
 
-from bifrost_socket.config import load_config, resolve_config_path
+from bifrost_socket.config import IB_MODE_MOCK, get_ib_mode, load_config, resolve_config_path
 from bifrost_socket.ib.account_agent.ib_account_agent import IbAccountAgent
 
 
@@ -59,6 +59,15 @@ def main() -> None:
     cfg, resolved = load_config(config_path)
 
     logging.getLogger(__name__).info("Config loaded: %s", resolved)
+
+    if get_ib_mode(cfg) == IB_MODE_MOCK:
+        from bifrost_socket.ib.mock_gateway import run_mock_gateway
+
+        logging.getLogger(__name__).warning(
+            "ib.mode=mock — running IB Account Agent as mock gateway (no TWS socket)"
+        )
+        run_mock_gateway(cfg, "ib_account_agent")
+        return
 
     app = IbAccountAgent(cfg)
     asyncio.run(app.run())

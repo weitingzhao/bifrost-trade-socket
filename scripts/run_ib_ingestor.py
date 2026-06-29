@@ -20,7 +20,7 @@ from bifrost_socket.ib.ib_timezone_patch import apply_ib_timezone_patch
 
 apply_ib_timezone_patch()
 
-from bifrost_socket.config import load_config, resolve_config_path
+from bifrost_socket.config import IB_MODE_MOCK, get_ib_mode, load_config, resolve_config_path
 from bifrost_socket.ib.ingestor.ib_ingestor import IbIngestor
 
 
@@ -60,6 +60,15 @@ def main() -> None:
     cfg, resolved = load_config(config_path)
 
     logging.getLogger(__name__).info("Config loaded: %s", resolved)
+
+    if get_ib_mode(cfg) == IB_MODE_MOCK:
+        from bifrost_socket.ib.mock_gateway import run_mock_gateway
+
+        logging.getLogger(__name__).warning(
+            "ib.mode=mock — running IB Ingestor as mock gateway (no TWS socket)"
+        )
+        run_mock_gateway(cfg, "ib_ingestor")
+        return
 
     app = IbIngestor(cfg)
     asyncio.run(app.run())

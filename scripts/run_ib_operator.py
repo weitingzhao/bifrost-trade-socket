@@ -26,7 +26,13 @@ from bifrost_socket.ib.ib_timezone_patch import apply_ib_timezone_patch
 
 apply_ib_timezone_patch()
 
-from bifrost_socket.config import get_effective_ib_config, load_config, resolve_config_path
+from bifrost_socket.config import (
+    IB_MODE_MOCK,
+    get_effective_ib_config,
+    get_ib_mode,
+    load_config,
+    resolve_config_path,
+)
 from bifrost_socket.ib.operator.config import effective_ib_operator_settings
 from bifrost_socket.ib.operator.redis_keys import IB_OPERATOR_LOG_STREAM_KEY
 from bifrost_socket.ib.operator.service import run_ib_operator_loop
@@ -89,6 +95,13 @@ def main() -> None:
     log = logging.getLogger(__name__)
 
     log.info("Config loaded: %s", resolved)
+
+    if get_ib_mode(cfg) == IB_MODE_MOCK:
+        from bifrost_socket.ib.mock_gateway import run_mock_gateway
+
+        log.warning("ib.mode=mock — running IB Operator as mock gateway (no TWS socket)")
+        run_mock_gateway(cfg, "ib_operator")
+        return
 
     op = effective_ib_operator_settings(cfg)
     log.info("IB Operator Redis health hash: %s", op["health_key"])
