@@ -167,6 +167,91 @@ def get_ib_mode(config: Dict[str, Any]) -> str:
     return IB_MODE_MOCK if mode == IB_MODE_MOCK else IB_MODE_LIVE
 
 
+# ── IB Lease leader election (W4 trade-k8s-native) ───────────────────────────────
+
+# Short role names for the default Lease object name (namespace already encodes env).
+_IB_LEASE_ROLE_SHORT = {
+    "ib_market_gateway": "market",
+    "ib_ingestor": "market",  # W6 alias — same Lease as market gateway
+    "ib_account_agent": "account",
+    "ib_operator": "operator",
+}
+
+
+def _resolve_market_gateway_client_id(hc: dict) -> tuple[int, bool]:
+    """Return (client_id, merged) — merged True when explicit market_gateway key set (W6)."""
+    if hc.get("market_gateway") is not None:
+        return int(hc["market_gateway"]), True
+    for key in ("ingestor", "ib_market_ingest"):
+        raw = hc.get(key)
+        if raw is not None:
+            return int(raw), False
+    return 150, False
+
+
+def _truthy(raw: Any) -> bool:
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def get_ib_lease_settings(config: Dict[str, Any], role: str) -> Dict[str, Any]:
+    """Resolve K8s Lease leader-election settings for an IB edge service.
+
+    Active-Standby HA: only the pod holding the Lease opens the IB socket, so the
+    environment never exceeds one ``clientId`` per role (avoids Error 326).
+
+    Disabled by default (``ib.lease.enabled: false``) so non-K8s / single-process
+    runs behave exactly as before. In-cluster, the StatefulSet (W5) sets
+    ``BIFROST_IB_LEASE_ENABLED=1`` and injects ``POD_NAME`` / ``POD_NAMESPACE``.
+
+    Resolution (env overrides YAML):
+      enabled  ← BIFROST_IB_LEASE_ENABLED | ib.lease.enabled (default false)
+      namespace← POD_NAMESPACE | ib.lease.namespace (default "default")
+      name     ← BIFROST_IB_LEASE_NAME | ib.lease.name (default bifrost-ib-<role>)
+      identity ← POD_NAME | HOSTNAME | socket hostname
+    """
+    import socket as _socket
+
+    lease_raw = {}
+    ib_raw = config.get("ib")
+    if isinstance(ib_raw, dict) and isinstance(ib_raw.get("lease"), dict):
+        lease_raw = ib_raw["lease"]
+
+    env_enabled = os.environ.get("BIFROST_IB_LEASE_ENABLED", "").strip()
+    if env_enabled:
+        enabled = _truthy(env_enabled)
+    else:
+        enabled = bool(lease_raw.get("enabled", False))
+
+    namespace = (
+        os.environ.get("POD_NAMESPACE", "").strip()
+        or str(lease_raw.get("namespace") or "").strip()
+        or "default"
+    )
+
+    short = _IB_LEASE_ROLE_SHORT.get(role, role)
+    name = (
+        os.environ.get("BIFROST_IB_LEASE_NAME", "").strip()
+        or str(lease_raw.get("name") or "").strip()
+        or f"bifrost-ib-{short}"
+    )
+
+    identity = (
+        os.environ.get("POD_NAME", "").strip()
+        or os.environ.get("HOSTNAME", "").strip()
+        or _socket.gethostname()
+    )
+
+    return {
+        "enabled": enabled,
+        "namespace": namespace,
+        "name": name,
+        "identity": identity,
+        "lease_duration_sec": float(lease_raw.get("lease_duration_sec") or 15.0),
+        "renew_deadline_sec": float(lease_raw.get("renew_deadline_sec") or 10.0),
+        "retry_period_sec": float(lease_raw.get("retry_period_sec") or 2.0),
+    }
+
+
 # ── IB config extraction ───────────────────────────────────────────────────────
 
 def get_effective_ib_config(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -174,8 +259,9 @@ def get_effective_ib_config(config: Dict[str, Any]) -> Dict[str, Any]:
 
     Returns a flat dict with:
       host, port, port_market_data, connect_timeout,
-      client_id_ingestor, client_id_account_agent, client_id_operator,
-      client_id_daemon, client_id_listener, client_id_worker_market,
+      client_id_market_gateway (W6 — merged ingestor+listener+worker_market),
+      client_id_ingestor (alias), client_id_account_agent, client_id_operator,
+      client_id_daemon, client_id_listener (alias), client_id_worker_market (alias),
       ib2_host, ib2_port, ib2_client_id_listener, ib2_client_id_operator,
       ib2_client_id_account_agent,
       ib_probe_interval_sec
@@ -205,16 +291,19 @@ def get_effective_ib_config(config: Dict[str, Any]) -> Dict[str, Any]:
     ib2_pt = str(s.get("port_type") or "tws_paper").strip().lower()
     ib2_port = _IB_PORT_MAP.get(ib2_pt, _IB_PORT_MAP["tws_paper"])
 
+    market_cid, merged_market = _resolve_market_gateway_client_id(hc)
+
     return {
         "host": host,
         "port": port,
         "port_market_data": port_market_data,
         "connect_timeout": float(ib_raw.get("connect_timeout") or 60.0),
+        "client_id_market_gateway": market_cid,
         "client_id_daemon": int(hc.get("daemon") or 1),
-        "client_id_listener": int(hc.get("listener") or 2),
+        "client_id_listener": market_cid if merged_market else int(hc.get("listener") or 2),
         "client_id_operator": int(hc.get("operator") or hc.get("account") or 100),
-        "client_id_worker_market": int(hc.get("worker_market") or 500),
-        "client_id_ingestor": int(hc.get("ingestor") or hc.get("ib_market_ingest") or 150),
+        "client_id_worker_market": market_cid if merged_market else int(hc.get("worker_market") or 500),
+        "client_id_ingestor": market_cid,
         "client_id_account_agent": int(hc.get("account_agent") or 151),
         "ib2_host": ib2_host,
         "ib2_port": ib2_port,

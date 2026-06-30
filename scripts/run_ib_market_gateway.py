@@ -1,7 +1,14 @@
-"""Deprecated alias for scripts/run_ib_market_gateway.py (W6 trade-k8s-native).
+"""Entry point: IB Market Gateway — unified market data edge (W6 trade-k8s-native).
 
-Compose and legacy tooling may still invoke this path; behaviour is identical to the
-market gateway entry (unified market_gateway client_id + Lease role ib_market_gateway).
+Merges the legacy ingestor + listener + worker_market IB client slots into a single
+``market_gateway`` client_id per TWS host. Subscribes watchlist quotes and writes
+``ib:ingester:tick:*`` to Redis; Celery historical bars route via ib-operator RPC.
+
+Usage:
+  python scripts/run_ib_market_gateway.py
+  python scripts/run_ib_market_gateway.py config/config.prod.yaml
+  python scripts/run_ib_market_gateway.py --prod
+  BIFROST_ENV=stg python scripts/run_ib_market_gateway.py
 """
 
 import logging
@@ -35,7 +42,7 @@ def _setup_logging(level: int) -> None:
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="IB Ingestor (alias → IB Market Gateway)")
+    parser = argparse.ArgumentParser(description="IB Market Gateway")
     parser.add_argument("config", nargs="?", help="Path to YAML config (optional)")
     parser.add_argument("--prod", action="store_true", help="Use config/config.prod.yaml")
     parser.add_argument("--dev", action="store_true", help="Use config/config.dev.yaml")

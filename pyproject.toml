@@ -22,6 +22,11 @@ dev = [
     "pytest-asyncio>=0.21",
     "ruff>=0.1.0",
 ]
+# W4 trade-k8s-native: K8s Lease leader election (active-standby IB edge).
+# Only needed in-cluster; unit tests use the in-memory backend.
+k8s = [
+    "kubernetes>=27.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

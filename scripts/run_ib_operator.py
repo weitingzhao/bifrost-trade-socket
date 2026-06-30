@@ -123,7 +123,16 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_sig)
     signal.signal(signal.SIGINT, _handle_sig)
 
-    run_ib_operator_loop(cfg, stop_event=stop)
+    from bifrost_socket.ib.lease import run_sync_ib_service
+
+    # W4 trade-k8s-native: gate the IB Operator socket behind a K8s Lease.
+    # When the Lease is lost the inner stop event unwinds the operator loop.
+    run_sync_ib_service(
+        cfg,
+        "ib_operator",
+        lambda inner_stop: run_ib_operator_loop(cfg, stop_event=inner_stop),
+        stop,
+    )
 
 
 if __name__ == "__main__":

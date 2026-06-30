@@ -8,7 +8,6 @@ Usage:
   BIFROST_ENV=prod python scripts/run_ib_account_agent.py
 """
 
-import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -69,8 +68,10 @@ def main() -> None:
         run_mock_gateway(cfg, "ib_account_agent")
         return
 
-    app = IbAccountAgent(cfg)
-    asyncio.run(app.run())
+    from bifrost_socket.ib.lease import run_async_ib_service
+
+    # W4 trade-k8s-native: gate IB connection behind a K8s Lease (active-standby).
+    run_async_ib_service(cfg, "ib_account_agent", lambda: IbAccountAgent(cfg).run())
 
 
 if __name__ == "__main__":

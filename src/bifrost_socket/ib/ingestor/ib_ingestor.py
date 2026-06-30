@@ -184,14 +184,14 @@ class IbIngestor:
             last_at=time.time(),
         )
         self._probe_interval_sec = self._lifecycle.probe_interval_sec
-        self._client_id = ib_cfg["client_id_ingestor"]
+        self._client_id = ib_cfg["client_id_market_gateway"]
         host = ib_cfg["host"]
         port = ib_cfg["port_market_data"]
         cid = self._client_id
         policy = ReconnectPolicy.from_config(self._cfg)
 
         logger.info(
-            "IB ingestor starting host=%s port=%s client_id=%s max_subs=%s",
+            "IB market gateway starting host=%s port=%s client_id=%s max_subs=%s",
             host,
             port,
             cid,
