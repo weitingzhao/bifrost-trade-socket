@@ -68,6 +68,7 @@ class MassiveRedisWriter:
         reconnects: int,
         msg_count: int,
         now: float | None = None,
+        ws_mode: str | None = None,
     ) -> None:
         import time
 
@@ -78,6 +79,8 @@ class MassiveRedisWriter:
             "reconnects": reconnects,
             "msg_count": msg_count,
         }
+        if ws_mode:
+            fields["ws_mode"] = ws_mode
         fields.update(
             service_heartbeat_fields(
                 interval_sec=float(HEALTH_HEARTBEAT_INTERVAL_SEC),

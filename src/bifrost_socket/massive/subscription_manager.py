@@ -34,6 +34,18 @@ async def fetch_watchlist_symbols(pg_params: dict) -> Set[str]:
     return await asyncio.to_thread(_fetch_watchlist_sync, pg_params)
 
 
+def massive_ws_enabled(tier: str, features: dict | None) -> bool:
+    """Whether to open a Polygon options WebSocket session.
+
+    Options Starter covers REST aggregates (Celery); live WS quotes require
+    Developer+ on Polygon. Explicit ``features.ws_enabled`` overrides tier default.
+    """
+    feats = features or {}
+    if "ws_enabled" in feats:
+        return bool(feats["ws_enabled"])
+    return (tier or "starter").strip().lower() != "starter"
+
+
 def channels_for_symbols(symbols: Set[str], tier: str, trades_enabled: bool) -> str:
     """Build Polygon subscribe params string for given symbols.
 

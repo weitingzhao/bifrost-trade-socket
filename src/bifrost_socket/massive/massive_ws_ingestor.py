@@ -21,6 +21,7 @@ from bifrost_socket.massive.redis_writer import MassiveRedisWriter
 from bifrost_socket.massive.subscription_manager import (
     channels_for_symbols,
     fetch_watchlist_symbols,
+    massive_ws_enabled,
     subscription_diff,
 )
 
@@ -45,15 +46,17 @@ def _get_massive_cfg(config: dict) -> dict:
         tier = "starter"
     feats = m.get("features") or {}
     trades_enabled = bool(feats.get("trades_enabled", tier == "developer"))
+    ws_enabled = massive_ws_enabled(tier, feats)
     ws_url = (m.get("ws_url") or "wss://socket.polygon.io/options").strip()
-    # Starter plans lack real-time WS; default to delayed endpoint (ARCHITECTURE § Massive).
-    if tier == "starter" and "://socket.polygon.io" in ws_url:
+    # Starter plans lack real-time WS; default to delayed endpoint when WS is enabled.
+    if tier == "starter" and ws_enabled and "://socket.polygon.io" in ws_url:
         ws_url = ws_url.replace("://socket.polygon.io", "://delayed.polygon.io")
     return {
         "api_key": api_key,
         "ws_url": ws_url,
         "tier": tier,
         "trades_enabled": trades_enabled,
+        "ws_enabled": ws_enabled,
     }
 
 
@@ -96,6 +99,7 @@ class MassiveWsIngestor:
         self._ws_connected = False
         self._last_msg_ts = 0.0
         self._current_symbols: Set[str] = set()
+        self._ws_mode: str | None = None
 
     async def run(self) -> None:
         import signal
@@ -105,10 +109,15 @@ class MassiveWsIngestor:
             loop.add_signal_handler(sig, self._stop.set)
 
         logger.info(
-            "Massive WS ingestor starting (tier=%s, trades=%s)",
+            "Massive WS ingestor starting (tier=%s, trades=%s, ws_enabled=%s)",
             self._massive["tier"],
             self._massive["trades_enabled"],
+            self._massive["ws_enabled"],
         )
+
+        if not self._massive["ws_enabled"]:
+            await self._run_rest_only_standby()
+            return
 
         health_task = asyncio.create_task(self._health_heartbeat_loop())
         attempt = 0
@@ -157,6 +166,34 @@ class MassiveWsIngestor:
             return self._last_msg_ts
         return time.time()
 
+    async def _run_rest_only_standby(self) -> None:
+        """Options Starter — REST/Celery aggregates only; keep process + health alive."""
+        logger.info(
+            "Massive WS standby (tier=%s): Options Starter uses REST/Celery aggregates, "
+            "not live option WebSocket quotes. Set massive.features.ws_enabled=true after "
+            "upgrading to Options Developer+.",
+            self._massive["tier"],
+        )
+        self._ws_mode = "rest_only"
+        self._ws_connected = False
+        health_task = asyncio.create_task(self._health_heartbeat_loop())
+        try:
+            await self._stop.wait()
+        finally:
+            health_task.cancel()
+            try:
+                await health_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._writer.write_health(
+            connected=False,
+            last_msg_ts=self._health_last_msg_ts(),
+            reconnects=self._reconnects,
+            msg_count=self._msg_count,
+            ws_mode=self._ws_mode,
+        )
+        logger.info("Massive WS ingestor stopped (REST-only standby)")
+
     async def _health_heartbeat_loop(self) -> None:
         while not self._stop.is_set():
             try:
@@ -165,6 +202,7 @@ class MassiveWsIngestor:
                     last_msg_ts=self._health_last_msg_ts(),
                     reconnects=self._reconnects,
                     msg_count=self._msg_count,
+                    ws_mode=self._ws_mode,
                 )
             except Exception as e:
                 logger.debug("health heartbeat: %s", e)
