@@ -225,7 +225,7 @@ class MassiveWsIngestor:
 
         try:
             async with websockets.connect(
-                effective_url, ping_interval=20, ping_timeout=10
+                effective_url, ping_interval=None, ping_timeout=None
             ) as ws:
                 # Welcome
                 welcome = await asyncio.wait_for(ws.recv(), timeout=10)
@@ -291,7 +291,7 @@ class MassiveWsIngestor:
                 logger.warning("No message for %ds, treating as stale", HEARTBEAT_TIMEOUT_SEC)
                 return
             except Exception as e:
-                logger.debug("recv error: %s", e)
+                logger.warning("recv ended: %s", e)
                 return
             try:
                 if queue.full():
