@@ -35,12 +35,19 @@ async def fetch_watchlist_symbols(pg_params: dict) -> Set[str]:
 
 
 def channels_for_symbols(symbols: Set[str], tier: str, trades_enabled: bool) -> str:
-    """Build Polygon subscribe params string for given symbols."""
+    """Build Polygon subscribe params string for given symbols.
+
+    Starter/delayed plans allow options quotes (Q.O) only; minute aggregates (AM.O)
+    and trades (T.O) require developer tier — subscribing to them yields WS 1008.
+    """
     if not symbols:
         return ""
-    prefixes = ["Q.O:", "AM.O:"]
-    if trades_enabled:
-        prefixes.append("T.O:")
+    tier_norm = (tier or "starter").strip().lower()
+    prefixes = ["Q.O:"]
+    if tier_norm == "developer":
+        prefixes.append("AM.O:")
+        if trades_enabled:
+            prefixes.append("T.O:")
     parts = []
     for sym in sorted(symbols):
         for p in prefixes:
