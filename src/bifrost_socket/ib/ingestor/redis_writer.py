@@ -66,6 +66,9 @@ class IbIngestorRedisWriter:
         last_service_heartbeat_at: float = 0.0,
         next_service_heartbeat_in_s: float = 0.0,
         service_heartbeat_reconnect_in_progress: str = "",
+        active_data_lines: int = 0,
+        data_line_budget: int = 0,
+        account_budget: int = 0,
     ) -> None:
         """Write health hash. env/config_file are set once at init via HealthHashWriter."""
         fields: Dict[str, Any] = {
@@ -98,6 +101,9 @@ class IbIngestorRedisWriter:
                 reconnect_in_progress=service_heartbeat_reconnect_in_progress,
             )
         )
+        fields["ib_active_data_lines"] = int(active_data_lines)
+        fields["data_line_budget"] = int(data_line_budget)
+        fields["account_budget"] = int(account_budget)
         self._health.write(fields)
 
     def set_subscriptions(self, contract_keys: Set[str]) -> None:

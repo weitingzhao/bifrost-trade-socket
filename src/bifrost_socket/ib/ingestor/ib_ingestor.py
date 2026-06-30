@@ -39,6 +39,7 @@ from bifrost_socket.ib.connection_lifecycle import (
     resolve_ib_broker_lifecycle,
 )
 from bifrost_socket.ib.connector.ib_client import MarketIbClient
+from bifrost_socket.ib.data_line_budget import load_ib_data_line_budget, resolve_gateway_max_subscriptions
 from bifrost_socket.ib.ingestor.redis_writer import IbIngestorRedisWriter
 from bifrost_socket.ib.ingestor.watchlist import fetch_watchlist
 
@@ -104,6 +105,9 @@ class IbIngestor:
         self._last_probe_at = 0.0
         self._last_probe_ok = False
         self._client_id = 0
+        # W10: account-level budget from K8s ConfigMap mount (when present).
+        self._budget = load_ib_data_line_budget()
+        self._active_data_lines = 0
         # Current session's client reference; used by probe loop.
         self._active_client: Optional[MarketIbClient] = None
 
@@ -114,10 +118,22 @@ class IbIngestor:
         return raw if isinstance(raw, dict) else {}
 
     def _max_subscriptions(self) -> int:
+        cfg_val: int | None = None
         try:
-            return max(1, min(5000, int(self._st().get("max_subscriptions", 200))))
+            cfg_val = int(self._st().get("max_subscriptions", 200))
         except (TypeError, ValueError):
-            return 200
+            cfg_val = None
+        return resolve_gateway_max_subscriptions(self._budget, cfg_val)
+
+    def _emit_data_line_gauge(self, active: int) -> None:
+        """Structured log for Grafana/Loki or kubectl logs (W10 verify bar)."""
+        self._active_data_lines = active
+        logger.info(
+            "ib_active_data_lines=%d data_line_budget=%d account_budget=%d",
+            active,
+            self._max_subscriptions(),
+            self._budget.account_budget,
+        )
 
     def _include_stk(self) -> bool:
         return bool(self._st().get("include_stk", True))
@@ -158,6 +174,9 @@ class IbIngestor:
             service_heartbeat_reconnect_in_progress=str(
                 sh.get("service_heartbeat_reconnect_in_progress") or ""
             ),
+            active_data_lines=self._active_data_lines,
+            data_line_budget=self._max_subscriptions(),
+            account_budget=self._budget.account_budget,
         )
         publish_ingestor_slot(
             self._tracker,
@@ -296,6 +315,7 @@ class IbIngestor:
                         "No STK/OPT rows in watchlist; retry in %ds", WATCHLIST_POLL_SEC
                     )
                     self._writer.set_subscriptions(set())
+                    self._emit_data_line_gauge(0)
                     self._push_health(
                         connected=client.connected_snapshot(),
                         last_msg_ts=self._last_msg_ts or time.time(),
@@ -336,6 +356,7 @@ class IbIngestor:
 
                 await client._run_on_client_loop(_apply_subs())
                 self._writer.set_subscriptions(keys)
+                self._emit_data_line_gauge(len(keys))
                 self._push_health(
                     connected=client.connected_snapshot(),
                     last_msg_ts=self._last_msg_ts or time.time(),
