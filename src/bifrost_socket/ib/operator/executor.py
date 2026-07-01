@@ -73,27 +73,6 @@ class IbOperatorExecutor:
             acc = self._account_for_slot(payload)
             rows = await acc.fetch_accounts_snapshot()
             return {"ok": True, "data": {"accounts": rows}}
-        if op == "place_stock_order":
-            symbol = str(payload.get("symbol") or "").strip()
-            side = str(payload.get("side") or "").strip()
-            qty = int(payload.get("quantity") or 0)
-            order_type = str(payload.get("order_type") or "market").strip().lower()
-            limit_price = payload.get("limit_price")
-            if not symbol or qty <= 0:
-                return {"ok": False, "error": "missing_symbol_or_quantity"}
-            acc = self._primary
-            await acc._ensure_connected_impl()
-            co = acc.connector
-            if co is None:
-                return {"ok": False, "error": "no_connector"}
-            trade = await co.place_order(
-                symbol, side, qty, order_type=order_type, limit_price=limit_price,
-            )
-            if trade is None:
-                return {"ok": False, "error": "place_order_returned_none"}
-            order = getattr(trade, "order", None)
-            oid = getattr(order, "orderId", None) if order is not None else None
-            return {"ok": True, "data": {"order_id": oid}}
         if op == "fetch_bars":
             symbol = str(payload.get("symbol") or "").strip()
             period = str(payload.get("period") or "1 day").strip()

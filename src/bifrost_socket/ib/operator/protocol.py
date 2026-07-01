@@ -17,7 +17,6 @@ ALL_OPS: Tuple[str, ...] = (
     "fetch_option_snapshot",
     "fetch_executions",
     "fetch_accounts_snapshot",
-    "place_stock_order",
     "ping",
     "disconnect_all",
     "reconnect_all",

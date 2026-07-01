@@ -1,4 +1,4 @@
-"""Entry point: IB Operator — RPC service for order execution via Redis Streams.
+"""Entry point: IB Operator — read-only TWS RPC via Redis Streams (bars, options, account snapshots).
 
 Usage:
   python scripts/run_ib_operator.py

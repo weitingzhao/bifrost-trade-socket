@@ -1,4 +1,4 @@
-"""IB connector: connect, positions, ticker, place_order; optional subscriptions.
+"""IB connector: connect, positions, ticker; optional subscriptions.
 
 Ported from bifrost-trader-engine/src/connector/ib.py.
 No src.* imports — depends only on ib_insync and stdlib.
@@ -11,9 +11,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from ib_insync import (
     IB,
     Stock,
-    MarketOrder,
-    LimitOrder,
-    Order,
     Trade,
     Fill,
     Position,
@@ -1420,42 +1417,3 @@ class IBConnector:
             loops,
         )
         return all_out
-
-    async def place_order(
-        self,
-        symbol: str,
-        side: str,
-        quantity: int,
-        order_type: str = "market",
-        limit_price: Optional[float] = None,
-    ) -> Optional[Trade]:
-        """Place stock order. Returns Trade or None."""
-        if not self.is_connected:
-            await self.connect()
-        if quantity <= 0:
-            logger.warning("place_order: quantity <= 0")
-            return None
-        stock = self._stock(symbol)
-        try:
-            await self.ib.qualifyContractsAsync(stock)
-            if order_type == "market":
-                order = MarketOrder(side.upper(), quantity)
-            else:
-                price = limit_price or 0.0
-                order = LimitOrder(side.upper(), quantity, price)
-                order.action = side.upper()
-            loop = asyncio.get_running_loop()
-            trade = await loop.run_in_executor(
-                None, lambda: self.ib.placeOrder(stock, order)
-            )
-            logger.info("Order placed: %s %s %s @ %s", side, quantity, symbol, order_type)
-            return trade
-        except (
-            ConnectionError,
-            BrokenPipeError,
-            ValueError,
-            TimeoutError,
-            asyncio.TimeoutError,
-        ) as e:
-            logger.error("place_order failed: %s", e)
-            return None
