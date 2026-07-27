@@ -15,6 +15,7 @@ ALL_OPS: Tuple[str, ...] = (
     "fetch_bars_range",
     "fetch_option_expirations",
     "fetch_option_snapshot",
+    "refresh_option_cache",
     "fetch_executions",
     "fetch_accounts_snapshot",
     "ping",
