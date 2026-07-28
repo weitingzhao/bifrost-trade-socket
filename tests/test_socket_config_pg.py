@@ -8,17 +8,17 @@ from bifrost_socket.config import get_pg_conn_params
 def test_get_pg_conn_params_reads_postgres_block() -> None:
     cfg = {
         "postgres": {
-            "host": "192.168.10.80",
+            "host": "bifrost-postgres-rw.data.svc.cluster.local",
             "port": 5432,
             "user": "bifrost",
             "password": "secret",
-            "database": "options_db",
+            "database": "bifrost_dev",
         }
     }
     params = get_pg_conn_params(cfg)
-    assert params["host"] == "192.168.10.80"
+    assert params["host"] == "bifrost-postgres-rw.data.svc.cluster.local"
     assert params["port"] == 5432
-    assert params["dbname"] == "options_db"
+    assert params["dbname"] == "bifrost_dev"
     assert params["user"] == "bifrost"
     assert params["password"] == "secret"
 
