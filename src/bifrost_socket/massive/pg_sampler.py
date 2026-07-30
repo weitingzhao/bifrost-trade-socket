@@ -1,71 +1,29 @@
-"""1-minute PostgreSQL sampler for Massive WS option snapshots."""
+"""1-minute PostgreSQL sampler for Massive WS option snapshots.
+
+P9: ``public.option_snapshots`` was dropped. REST/plugin ingest owns
+``market.option_snapshot``. This sampler is a no-op (Redis path remains).
+"""
 
 from __future__ import annotations
 
 import logging
-import time
-from datetime import datetime, timezone
 from typing import Any, Dict
 
 from bifrost_socket.massive.redis_keys import PG_SAMPLE_INTERVAL_SEC
 
 logger = logging.getLogger(__name__)
 
+# Re-export for callers that may read the interval constant via this module.
+__all__ = ["PgSampler", "PG_SAMPLE_INTERVAL_SEC"]
+
 
 class PgSampler:
-    """Writes at most one snapshot row per contract_key per minute to PostgreSQL."""
+    """Retired PG writer — Massive WS samples stay in Redis only (P9)."""
 
     def __init__(self, pg_params: dict) -> None:
         self._pg_params = pg_params
         self._last_write: Dict[str, float] = {}
 
     def maybe_write(self, contract_key: str, data: Dict[str, Any]) -> bool:
-        """Synchronous write; call via asyncio.to_thread from async context."""
-        now = time.time()
-        if now - self._last_write.get(contract_key, 0) < PG_SAMPLE_INTERVAL_SEC:
-            return False
-        try:
-            import psycopg2
-
-            conn = psycopg2.connect(**self._pg_params)
-            try:
-                with conn.cursor() as cur:
-                    t_raw = data.get("t", now)
-                    snapshot_ts = datetime.fromtimestamp(
-                        t_raw / 1000 if t_raw > 1e12 else t_raw,
-                        tz=timezone.utc,
-                    )
-                    cur.execute(
-                        """
-                        INSERT INTO option_snapshots (
-                            contract_key, snapshot_ts,
-                            iv, delta, gamma, theta, vega, open_interest,
-                            source, created_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'massive_ws', now())
-                        ON CONFLICT (contract_key, snapshot_ts) DO UPDATE SET
-                          iv = COALESCE(EXCLUDED.iv, option_snapshots.iv),
-                          delta = COALESCE(EXCLUDED.delta, option_snapshots.delta),
-                          gamma = COALESCE(EXCLUDED.gamma, option_snapshots.gamma),
-                          theta = COALESCE(EXCLUDED.theta, option_snapshots.theta),
-                          vega = COALESCE(EXCLUDED.vega, option_snapshots.vega),
-                          open_interest = COALESCE(EXCLUDED.open_interest, option_snapshots.open_interest)
-                        """,
-                        (
-                            contract_key,
-                            snapshot_ts,
-                            data.get("iv"),
-                            data.get("delta"),
-                            data.get("gamma"),
-                            data.get("theta"),
-                            data.get("vega"),
-                            data.get("oi"),
-                        ),
-                    )
-                conn.commit()
-                self._last_write[contract_key] = now
-                return True
-            finally:
-                conn.close()
-        except Exception as e:
-            logger.debug("PG sample write failed for %s: %s", contract_key, e)
-            return False
+        """No-op since P9 dropped ``public.option_snapshots``."""
+        return False
