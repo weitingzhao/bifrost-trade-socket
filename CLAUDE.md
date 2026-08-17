@@ -70,6 +70,6 @@ TWS/Gateway 运行在 Mac Mini 上，Linux 服务器（容器）通过 `IB_HOST`
 
 ### Massive 子域
 - 行情写入：`massive:{contract_key}` (Redis Key, JSON)
-- 变更通知：`massive:channel` (Redis Pub/Sub)
+- 变更通知：`massive:stream` (Redis Stream, XADD)
 - 订阅集合：`massive:meta:subscriptions` (Redis Set)
 - 健康键：`bifrost:health:ws_massive_option` (定期刷新)
