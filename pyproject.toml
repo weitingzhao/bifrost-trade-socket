@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "bifrost-socket"
 version = "0.1.0"
-description = "WebSocket edge services (IB Ingestor/AccountAgent/Operator, Massive WS) — Bifrost Trade system"
+description = "WebSocket edge services (IB Ingestor/AccountAgent/Operator) — Bifrost Trade system"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

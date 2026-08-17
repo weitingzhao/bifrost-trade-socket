@@ -10,7 +10,7 @@ image works across dev/stg/prod without per-overlay env wiring.
 
 Usage:
   python scripts/wait_for_data.py                # block until pg + redis(live) ready
-  python scripts/wait_for_data.py --no-pg        # redis only (operator / massive-ws)
+  python scripts/wait_for_data.py --no-pg        # redis only (operator / IB edge)
   python scripts/wait_for_data.py --queue        # also wait redis_queue (celery/daemon)
   python scripts/wait_for_data.py --once         # single check, exit 0/1 (readiness probe)
   python scripts/wait_for_data.py --timeout 600  # overall deadline (default 600s, 0 = forever)
