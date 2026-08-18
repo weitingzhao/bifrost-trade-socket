@@ -61,7 +61,7 @@ def _fetch_watchlist_sync(
                     cur.execute(
                         """
                         SELECT DISTINCT contract_key, symbol, expiry, strike, option_right
-                        FROM account_positions
+                        FROM brokerage.positions
                         WHERE sec_type = 'OPT'
                           AND position IS NOT NULL AND position != 0
                           AND symbol IS NOT NULL AND TRIM(symbol) <> ''
