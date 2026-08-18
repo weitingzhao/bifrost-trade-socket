@@ -57,7 +57,8 @@ def _fetch_watchlist_sync(
                             "strike": float(r["strike"]),
                             "option_right": (r.get("option_right") or "C").strip().upper() or "C",
                         })
-                    # Append non-zero position OPT contracts (avoid duplicates)
+                    # Append non-zero position OPT contracts (avoid duplicates).
+                    # Positions live in Golden Source; per-env DBs expose brokerage.positions via FDW.
                     cur.execute(
                         """
                         SELECT DISTINCT contract_key, symbol, expiry, strike, option_right
