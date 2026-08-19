@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ib_insync import (
@@ -317,9 +318,12 @@ class IBConnector:
         self._connected = False
         logger.info("Disconnected from IB")
 
+    _IB_ACCOUNT_ID_RE = re.compile(r"^[A-Z]{1,2}\d+$")
+
     def get_managed_accounts(self) -> List[str]:
         """Return list of managed account IDs (e.g. ['U17113214', 'DU456']). Empty when not connected. R-A1.
-        IB API returns comma-separated string; we normalize to list of non-empty IDs."""
+        IB API returns comma-separated string; we normalize to list of non-empty IDs.
+        Filters out TWS login usernames that IB sometimes includes."""
         if not self.is_connected:
             return []
         try:
@@ -329,12 +333,19 @@ class IBConnector:
             )
             if not raw:
                 return []
-            # TWS API returns comma-separated string (e.g. "U17113214,DU123"); some wrappers return list
             if isinstance(raw, str):
                 parts = raw.split(",")
             else:
                 parts = [str(s) for s in raw]
-            out = [s.strip() for s in parts if s.strip()]
+            out = []
+            for s in parts:
+                s = s.strip()
+                if not s:
+                    continue
+                if not self._IB_ACCOUNT_ID_RE.match(s):
+                    logger.info("[R-A1] Filtered non-account ID from managedAccounts: %r", s)
+                    continue
+                out.append(s)
             logger.info("[R-A1] get_managed_accounts parsed=%s", out)
             return out
         except Exception as e:

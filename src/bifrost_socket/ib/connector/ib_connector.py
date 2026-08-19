@@ -6,6 +6,7 @@ No src.* imports — depends only on ib_insync and stdlib.
 
 import asyncio
 import logging
+import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ib_insync import (
@@ -313,8 +314,14 @@ class IBConnector:
         self._connected = False
         logger.info("Disconnected from IB")
 
+    _IB_ACCOUNT_ID_RE = re.compile(r"^[A-Z]{1,2}\d+$")
+
     def get_managed_accounts(self) -> List[str]:
-        """Return list of managed account IDs. Empty when not connected."""
+        """Return list of managed account IDs. Empty when not connected.
+
+        Filters out TWS login usernames that IB sometimes includes in
+        managedAccounts(); only U/DU-prefixed IDs are real accounts.
+        """
         if not self.is_connected:
             return []
         try:
@@ -325,7 +332,16 @@ class IBConnector:
                 parts = raw.split(",")
             else:
                 parts = [str(s) for s in raw]
-            return [s.strip() for s in parts if s.strip()]
+            out = []
+            for s in parts:
+                s = s.strip()
+                if not s:
+                    continue
+                if not self._IB_ACCOUNT_ID_RE.match(s):
+                    logger.info("Filtered non-account ID from managedAccounts: %r", s)
+                    continue
+                out.append(s)
+            return out
         except Exception as e:
             logger.warning("get_managed_accounts: %s", e, exc_info=True)
             return []
