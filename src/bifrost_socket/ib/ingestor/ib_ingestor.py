@@ -19,7 +19,7 @@ import logging
 import math
 import signal
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 from bifrost_core.core.message_center import IbConnectionStatusTracker
 from bifrost_core.ws_client.retry import ReconnectPolicy

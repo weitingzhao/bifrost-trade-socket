@@ -31,7 +31,6 @@ from bifrost_socket.config import (
 )
 from bifrost_socket.ib.account_agent.redis_writer import IbAccountAgentRedisWriter
 from bifrost_socket.ib.connection_lifecycle import (
-    REASON_SERVICE_STOPPED,
     REASON_SESSION_ENDED,
     HeartbeatReconnectTarget,
     ServiceHeartbeatClock,

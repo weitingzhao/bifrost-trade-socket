@@ -27,7 +27,6 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from bifrost_socket.ib.connector.ib_connector import IBConnector, IBConnectionDroppedError
-from bifrost_socket.ib.connection_lifecycle import SERVICE_HEARTBEAT_CONNECT_TIMEOUT_SEC
 
 logger = logging.getLogger(__name__)
 
