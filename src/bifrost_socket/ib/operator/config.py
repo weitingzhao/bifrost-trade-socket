@@ -76,5 +76,4 @@ def effective_ib_operator_settings(config: Dict[str, Any]) -> Dict[str, Any]:
         "health_refresh_sec": float(raw.get("health_refresh_sec") or 30),
         "max_result_bytes": int(raw.get("max_result_bytes") or (4 * 1024 * 1024)),
         "block_ms": int(raw.get("block_ms") or 5000),
-        "use_for_celery_bars": bool(raw.get("use_for_celery_bars")),
     }
