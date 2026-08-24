@@ -11,7 +11,6 @@ image works across dev/stg/prod without per-overlay env wiring.
 Usage:
   python scripts/wait_for_data.py                # block until pg + redis(live) ready
   python scripts/wait_for_data.py --no-pg        # redis only (operator / IB edge)
-  python scripts/wait_for_data.py --queue        # also wait redis_queue (celery/daemon)
   python scripts/wait_for_data.py --once         # single check, exit 0/1 (readiness probe)
   python scripts/wait_for_data.py --timeout 600  # overall deadline (default 600s, 0 = forever)
 """
@@ -48,7 +47,6 @@ def endpoints_from_config(
     cfg: Dict[str, Any],
     *,
     include_pg: bool = True,
-    include_queue: bool = False,
 ) -> List[Endpoint]:
     """Resolve the (label, host, port) tuples to wait for from a loaded config."""
     out: List[Endpoint] = []
@@ -66,13 +64,6 @@ def endpoints_from_config(
         if host:
             out.append(("redis", host, int(redis.get("port") or 6379)))
 
-    if include_queue:
-        rq = cfg.get("redis_queue")
-        if isinstance(rq, dict) and rq.get("enabled", True):
-            host = str(rq.get("host") or "").strip()
-            if host:
-                out.append(("redis_queue", host, int(rq.get("port") or 6379)))
-
     return out
 
 
@@ -87,7 +78,6 @@ def _tcp_ok(host: str, port: int, connect_timeout: float) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Wait for CNPG Postgres + Redis")
     parser.add_argument("--no-pg", action="store_true", help="Skip Postgres (redis-only services)")
-    parser.add_argument("--queue", action="store_true", help="Also wait redis_queue")
     parser.add_argument("--once", action="store_true", help="Single check, exit 0/1 (probe mode)")
     parser.add_argument("--timeout", type=float, default=600.0, help="Overall deadline sec (0 = forever)")
     parser.add_argument("--interval", type=float, default=2.0, help="Retry interval sec")
@@ -100,9 +90,7 @@ def main() -> int:
         print(f"wait_for_data: cannot read config {_config_path()!r}: {exc}", flush=True)
         return 1
 
-    endpoints = endpoints_from_config(
-        cfg, include_pg=not args.no_pg, include_queue=args.queue
-    )
+    endpoints = endpoints_from_config(cfg, include_pg=not args.no_pg)
     if not endpoints:
         print("wait_for_data: no data endpoints resolved from config — nothing to wait for", flush=True)
         return 0

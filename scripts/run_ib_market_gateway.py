@@ -2,7 +2,8 @@
 
 Merges the legacy ingestor + listener + worker_market IB client slots into a single
 ``market_gateway`` client_id per TWS host. Subscribes watchlist quotes and writes
-``ib:ingester:tick:*`` to Redis; Celery historical bars route via ib-operator RPC.
+``ib:ingester:tick:*`` to Redis. Historical bars are served by Market Data Plugin
+minute-bars CronJobs (Trade Celery retired — Wave 5).
 
 Usage:
   python scripts/run_ib_market_gateway.py

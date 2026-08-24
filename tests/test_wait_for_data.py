@@ -15,7 +15,6 @@ _spec.loader.exec_module(wait_for_data)
 _CFG = {
     "postgres": {"host": "bifrost-postgres-rw.data.svc.cluster.local", "port": 5432},
     "redis": {"enabled": True, "host": "redis-live-stg.data.svc.cluster.local", "port": 6379},
-    "redis_queue": {"enabled": True, "host": "redis-queue-stg.data.svc.cluster.local", "port": 6379},
 }
 
 
@@ -33,12 +32,6 @@ def test_no_pg_skips_postgres():
     assert labels == ["redis"]
 
 
-def test_queue_includes_redis_queue():
-    eps = wait_for_data.endpoints_from_config(_CFG, include_queue=True)
-    labels = [e[0] for e in eps]
-    assert labels == ["postgres", "redis", "redis_queue"]
-
-
 def test_disabled_redis_is_skipped():
     cfg = {"postgres": {"host": "pg", "port": 5432}, "redis": {"enabled": False, "host": "r"}}
     eps = wait_for_data.endpoints_from_config(cfg)
@@ -46,4 +39,4 @@ def test_disabled_redis_is_skipped():
 
 
 def test_missing_blocks_resolve_to_empty():
-    assert wait_for_data.endpoints_from_config({}, include_pg=True, include_queue=True) == []
+    assert wait_for_data.endpoints_from_config({}, include_pg=True) == []
